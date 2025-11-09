@@ -1,6 +1,8 @@
 import os
+
 import pandas as pd
 import pytest
+
 from processors.wechat_processor import process_wechat
 
 
@@ -25,7 +27,7 @@ def test_process_wechat_integration():
         pytest.skip("WeChat processor returned empty DataFrame (no identifiable transactions in sample)")
 
     # Basic checks for normalized output
-    expected_at_least = {"date", "amount"}
+    expected_at_least = {"date", "amount", "owner_name"}
     assert expected_at_least.issubset(set(result.columns))
 
     # # Amount should be numeric (float) at this stage; signed negative for 支出 handled per-row

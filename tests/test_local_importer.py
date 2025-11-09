@@ -1,5 +1,4 @@
 import os
-import io
 import zipfile
 from datetime import datetime, timedelta
 
@@ -56,6 +55,50 @@ def test_process_local_files_directory_recursion_and_skip_rules(tmp_path: pytest
     assert "inside.csv" in identifiers
     # Ensure skip monthly archive
     assert "ignored.csv" not in identifiers
+
+
+def _build_encrypted_zip(path, password: str) -> None:
+    pyzipper = pytest.importorskip("pyzipper")
+    with pyzipper.AESZipFile(
+            path,
+            mode="w",
+            compression=pyzipper.ZIP_DEFLATED,
+            encryption=pyzipper.WZ_AES,
+    ) as zf:
+        zf.setpassword(password.encode("utf-8"))
+        zf.writestr("secure.csv", "date,amount\n2025-01-01,10\n")
+
+
+def test_process_local_files_handles_encrypted_zip(tmp_path: pytest.TempPathFactory):
+    archive_path = tmp_path / "secure.zip"
+    password = "secret123"
+    _build_encrypted_zip(archive_path, password)
+
+    calls = []
+
+    def resolver(identifier: str, inner: str, attempt: int) -> str:
+        calls.append((identifier, inner, attempt))
+        return password
+
+    files = process_local_files([str(archive_path)], passphrase_resolver=resolver)
+    assert len(files) == 1
+    name, content = files[0]
+    assert name == "secure.csv"
+    assert b"2025-01-01" in content
+    # Ensure resolver was invoked once and cached
+    assert calls == [(str(archive_path), "secure.csv", 0)]
+
+
+def test_process_local_files_skips_encrypted_zip_without_passphrase(tmp_path: pytest.TempPathFactory):
+    archive_path = tmp_path / "secure.zip"
+    password = "secret123"
+    _build_encrypted_zip(archive_path, password)
+
+    def resolver(identifier: str, inner: str, attempt: int):
+        return None
+
+    files = process_local_files([str(archive_path)], passphrase_resolver=resolver)
+    assert files == []
 
 
 def test_archive_last_month_creates_zip_with_only_last_month_files(tmp_path: pytest.TempPathFactory):

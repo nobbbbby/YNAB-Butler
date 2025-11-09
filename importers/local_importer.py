@@ -1,11 +1,37 @@
+import logging
 import os
-import zipfile
 import shutil
 import tempfile
+import zipfile
 from datetime import datetime, timedelta
-from typing import List, Tuple, Iterable
-import logging
+from typing import Dict, Iterable, List, Optional, Tuple
 
+from importers.zip_utils import (
+    PassphraseResolver,
+    extract_zip_file,
+    get_env_passphrase,
+    next_six_digit_candidate,
+)
+
+LOCAL_PASSPHRASE_TEMPLATES = [
+    "LOCAL_ARCHIVE_PASSPHRASE_{identifier}",
+    "LOCAL_ARCHIVE_PASSPHRASE",
+    "EMAIL_PASSPHRASE_{identifier}",
+    "EMAIL_PASSPHRASE",
+]
+
+
+def _default_passphrase_resolver(identifier: str, inner_name: str, attempt: int) -> Optional[str]:
+    """Resolve passphrase: environment first, then six-digit random candidates.
+
+    Non-interactive by default (no prompt) to support unattended local ingestion.
+    """
+    if attempt == 0:
+        env_passphrase = get_env_passphrase(identifier, LOCAL_PASSPHRASE_TEMPLATES)
+        if env_passphrase:
+            return env_passphrase
+    # Try next six-digit candidate tied to identifier (e.g., folder or user)
+    return next_six_digit_candidate(identifier)
 
 def extract_archive(file_path: str, extract_dir: str) -> List[Tuple[str, bytes]]:
     """Extract supported archive files and return list of (filename, content) tuples.
@@ -70,13 +96,18 @@ def _iter_candidate_files(inputs: Iterable[str]) -> Iterable[str]:
                 yield inp
 
 
-def process_local_files(file_paths: List[str]) -> List[Tuple[str, bytes]]:
+def process_local_files(
+        file_paths: List[str],
+        passphrase_resolver: Optional[PassphraseResolver] = None,
+) -> List[Tuple[str, bytes]]:
     """Process transaction files from local filesystem (files or directories), including compressed archives.
     Returns list of (identifier, content) where identifier is the full file path for local files or inner filename for archives.
     """
     if not file_paths:
         logging.warning("No file paths provided")
         return []
+    resolver = passphrase_resolver or _default_passphrase_resolver
+    passphrase_cache: Dict[str, str] = {}
     all_files: List[Tuple[str, bytes]] = []
     temp_dir = None
     try:
@@ -90,13 +121,24 @@ def process_local_files(file_paths: List[str]) -> List[Tuple[str, bytes]]:
                 continue
             if is_archive:
                 logging.info(f"Processing archive: {file_path}")
-                temp_dir = tempfile.mkdtemp()
-                extracted_files = extract_archive(file_path, temp_dir)
+                if ext == '.zip':
+                    extracted_files = extract_zip_file(
+                        file_path,
+                        file_path,
+                        resolver,
+                        passphrase_cache,
+                        cache_key=file_path.lower(),
+                        context_provider=lambda info: info.filename,
+                    )
+                else:
+                    temp_dir = tempfile.mkdtemp()
+                    extracted_files = extract_archive(file_path, temp_dir)
                 for ext_filename, content in extracted_files:
                     logging.info(f"  Processing file from archive: {ext_filename}")
                     all_files.append((ext_filename, content))
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                temp_dir = None
+                if temp_dir:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    temp_dir = None
             else:
                 logging.info(f"Processing local file: {file_path}")
                 with open(file_path, 'rb') as f:

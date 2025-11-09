@@ -1,7 +1,9 @@
-import ynab
-import logging
 import json
-from typing import List, Any, Dict, Optional
+import logging
+from typing import List, Any
+
+import ynab
+
 
 class YNABClient:
     def __init__(self, api_key: str):

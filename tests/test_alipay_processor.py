@@ -1,7 +1,10 @@
 import os
+
 import pandas as pd
 import pytest
+
 from processors.alipay_processor import process_alipay, parse_alipay_csv
+
 
 def test_process_alipay_integration():
     """
@@ -16,7 +19,7 @@ def test_process_alipay_integration():
     df = parse_alipay_csv(content)
     result = process_alipay(df)
     # Basic checks for new YNAB-compatible output
-    expected_cols = {'status', 'date', 'amount', 'payee_name', 'memo'}
+    expected_cols = {'status', 'date', 'amount', 'payee_name', 'memo', 'owner_name'}
     assert expected_cols.issubset(result.columns)
     # Amount should be int (milliunits)
     assert pd.api.types.is_integer_dtype(result['amount'])

@@ -20,7 +20,6 @@ def parse_alipay_csv(source: Union[str, bytes]) -> pd.DataFrame:
             try:
                 decoded = source.decode(enc)
                 lines = io.StringIO(decoded).readlines()
-                decoded_encoding = enc
                 break
             except UnicodeDecodeError:
                 continue
@@ -68,13 +67,17 @@ def process_alipay(df: pd.DataFrame) -> Optional[pd.DataFrame]:
                 abs(float(x['amount'])) * 1000),
             axis=1
         )
+    # Ensure owner_name column exists even if export omits the field
+    if 'owner_name' not in df.columns:
+        df['owner_name'] = None
+
     # Ensure date is in ISO format (YYYY-MM-DD)
     if 'date' in df.columns:
         df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
     # Add account_id column
     # Select only relevant columns for YNAB
     # Keep account_name in DF so main can build per-origin mapping prior to conversion
-    columns = ['status', 'date', 'amount', 'payee_name', 'memo', 'account_name']
+    columns = ['status', 'date', 'amount', 'payee_name', 'memo', 'account_name', 'owner_name']
     df = df[[col for col in columns if col in df.columns]]
     # Drop rows with missing required fields
     df = df.dropna(subset=['date', 'amount', 'account_name'])

@@ -1,6 +1,7 @@
-import pandas as pd
 import logging
 from typing import Optional
+
+import pandas as pd
 
 
 def process_wechat(df: pd.DataFrame) -> Optional[pd.DataFrame]:
@@ -46,6 +47,7 @@ def process_wechat(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         '收/支': 'transaction_type',
         '当前状态': 'status',
         '支付方式': 'account_name',
+        '微信昵称': 'owner_name',
     }
     # Now rename known columns if present
     df = df.rename(columns={k: v for k, v in mapping.items() if k in df.columns})
@@ -104,8 +106,11 @@ def process_wechat(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         logging.warning("WeChat: no date-like column identified; returning empty DataFrame")
         return df.iloc[0:0]
 
+    if 'owner_name' not in df.columns:
+        df['owner_name'] = None
+
     # Keep only relevant columns if they exist; otherwise keep as-is
-    desired = ['date', 'amount', 'payee_name', 'memo', 'status', 'account_name']
+    desired = ['date', 'amount', 'payee_name', 'memo', 'status', 'account_name', 'owner_name']
     existing = [c for c in desired if c in df.columns]
     if existing:
         df = df[existing + [c for c in df.columns if c not in existing]]
