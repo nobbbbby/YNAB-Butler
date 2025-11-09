@@ -107,13 +107,13 @@
 ### 本地文件
 
 ```bash
-python main.py --files /path/to/wechat_or_alipay_transactions.csv
+python butler.py --files /path/to/wechat_or_alipay_transactions.csv
 ```
 
 ### 邮件导入
 
 ```bash
-python main.py
+python butler.py
 ```
 
 程序将：
@@ -127,7 +127,7 @@ python main.py
 
 - 不会暴力破解口令；除非通过环境变量提供，否则口令仅在本次运行内驻留内存。
 - 解密后的附件仅在内存或临时文件中短暂存在，处理完成后立即清除。
-- 已处理邮件的 UID 会记录在 `.ynab-butler/state.json` 中，以避免重复导入；如需重新处理历史邮件，可手动删除该文件。
+- 已处理邮件 UID 以及账户名称 → YNAB 账户映射会记录在 `.ynab-butler/state.json` 中，以避免重复导入；如需重新处理历史邮件或重新映射账户，可手动删除该文件。
 - Outlook / Office365 现已强制启用 OAuth2（Modern Auth）。请设置 `EMAIL_AUTH_METHOD=oauth` 及上述 OAuth 环境变量，程序会在
   IMAP 登录前安全刷新访问令牌并通过 XOAUTH2 认证。
 - 若银行邮件不直接附带微信账单，而是提供形如

@@ -13,6 +13,8 @@ from importers.zip_utils import (
     next_six_digit_candidate,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 LOCAL_PASSPHRASE_TEMPLATES = [
     "LOCAL_ARCHIVE_PASSPHRASE_{identifier}",
     "LOCAL_ARCHIVE_PASSPHRASE",
@@ -60,7 +62,7 @@ def extract_archive(file_path: str, extract_dir: str) -> List[Tuple[str, bytes]]
                         extracted_files.append((file, f.read()))
         return extracted_files
     except Exception as e:
-        logging.error(f"Error extracting archive {file_path}: {str(e)}")
+        LOGGER.error(f"Error extracting archive {file_path}: {str(e)}")
         return []
 
 
@@ -82,7 +84,7 @@ def _iter_candidate_files(inputs: Iterable[str]) -> Iterable[str]:
     """Yield candidate file paths from files or directories recursively, applying skip rules."""
     for inp in inputs:
         if not os.path.exists(inp):
-            logging.error(f"Path not found: {inp}")
+            LOGGER.error(f"Path not found: {inp}")
             continue
         if os.path.isdir(inp):
             for root, _, files in os.walk(inp):
@@ -104,7 +106,7 @@ def process_local_files(
     Returns list of (identifier, content) where identifier is the full file path for local files or inner filename for archives.
     """
     if not file_paths:
-        logging.warning("No file paths provided")
+        LOGGER.warning("No file paths provided")
         return []
     resolver = passphrase_resolver or _default_passphrase_resolver
     passphrase_cache: Dict[str, str] = {}
@@ -120,7 +122,7 @@ def process_local_files(
             if filename.lower().endswith('.archive.zip'):
                 continue
             if is_archive:
-                logging.info(f"Processing archive: {file_path}")
+                LOGGER.debug(f"Processing archive: {file_path}")
                 if ext == '.zip':
                     extracted_files = extract_zip_file(
                         file_path,
@@ -134,20 +136,20 @@ def process_local_files(
                     temp_dir = tempfile.mkdtemp()
                     extracted_files = extract_archive(file_path, temp_dir)
                 for ext_filename, content in extracted_files:
-                    logging.info(f"  Processing file from archive: {ext_filename}")
+                    LOGGER.debug(f"  Processing file from archive: {ext_filename}")
                     all_files.append((ext_filename, content))
                 if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     temp_dir = None
             else:
-                logging.info(f"Processing local file: {file_path}")
+                LOGGER.debug(f"Processing local file: {file_path}")
                 with open(file_path, 'rb') as f:
                     content = f.read()
                 # Use full path as identifier so caller can rename after success
                 all_files.append((file_path, content))
         return all_files
     except Exception as e:
-        logging.error(f"Error during file processing: {str(e)}")
+        LOGGER.error(f"Error during file processing: {str(e)}")
         return []
     finally:
         if temp_dir and os.path.exists(temp_dir):

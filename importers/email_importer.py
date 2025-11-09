@@ -36,7 +36,12 @@ def _ensure_imap_file_setter() -> None:
 
 _ensure_imap_file_setter()
 
-from importers.zip_utils import PassphraseResolver, extract_zip_bytes, get_env_passphrase, next_six_digit_candidate
+from importers.zip_utils import (  # noqa: E402
+    PassphraseResolver,
+    extract_zip_bytes,
+    get_env_passphrase,
+    next_six_digit_candidate,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -73,7 +78,7 @@ class EmailFetchResult:
 
 
 class EmailStateStore:
-    """Persist mailbox message UIDs and owner budget mappings."""
+    """Persist mailbox message UIDs, owner budget mappings, and account mappings."""
 
     def __init__(self, path: Path = STATE_FILE):
         self.path = Path(path)
@@ -95,6 +100,7 @@ class EmailStateStore:
         if legacy:
             LOGGER.debug("Ignoring legacy sender_budget entries; migrate to owner_budget if needed.")
         self._data.setdefault('owner_budget', {})
+        self._data.setdefault('account_mappings', {})
 
     def save(self) -> None:
         if not self._dirty:
@@ -133,6 +139,32 @@ class EmailStateStore:
         if self._data['owner_budget'].get(key) == budget_id:
             return
         self._data['owner_budget'][key] = budget_id
+        self._dirty = True
+
+    @staticmethod
+    def _account_key(budget_id: str, account_name: str) -> str:
+        return f"{budget_id}:{account_name.strip().lower()}"
+
+    def get_account_mapping(self, budget_id: str, account_name: str) -> Optional[str]:
+        if not budget_id or not account_name:
+            return None
+        return self._data['account_mappings'].get(self._account_key(budget_id, account_name))
+
+    def set_account_mapping(self, budget_id: str, account_name: str, account_id: str) -> None:
+        if not (budget_id and account_name and account_id):
+            return
+        mapping = self._data.setdefault('account_mappings', {})
+        key = self._account_key(budget_id, account_name)
+        if mapping.get(key) == account_id:
+            return
+        mapping[key] = account_id
+        self._dirty = True
+
+    def get_all_account_mappings(self) -> Dict[str, str]:
+        return dict(self._data.get('account_mappings', {}))
+
+    def replace_account_mappings(self, new_mappings: Dict[str, str]) -> None:
+        self._data['account_mappings'] = dict(new_mappings)
         self._dirty = True
 
 
@@ -176,7 +208,7 @@ def _acquire_access_token(oauth_config: Optional[Dict[str, object]]) -> Optional
 
     try:
         import msal  # type: ignore
-    except ImportError as exc:  # pragma: no cover - guarded by dependency
+    except ImportError:  # pragma: no cover - guarded by dependency
         LOGGER.error(
             "msal package is required for OAuth2 authentication. Install it or set EMAIL_AUTH_METHOD=basic."
         )
@@ -473,12 +505,12 @@ def download_attachments(
         try:
             # IMAPClient search uses uppercase keys
             message_ids = mail.search(['FROM', search_value])
-            LOGGER.info("Sender %s returned %d message(s).", sender, len(message_ids))
+            LOGGER.debug("Sender %s returned %d message(s).", sender, len(message_ids))
             if not message_ids and header_search_fallback:
                 LOGGER.debug("Sender %s had no matches with FROM; retrying HEADER search.", sender)
                 message_ids = mail.search(['HEADER', 'FROM', search_value])
                 if message_ids:
-                    LOGGER.info(
+                    LOGGER.debug(
                         "Sender %s matched %d message(s) via HEADER FROM fallback.",
                         sender,
                         len(message_ids),
@@ -502,14 +534,16 @@ def download_attachments(
                 warnings.append(f"fetch-failed:{uid_str}")
                 continue
             msg_blob = fetch_data.get(uid, {}).get(b'RFC822')
+            msg_warnings: List[str] = []
             if not msg_blob:
-                LOGGER.warning("Message %s had no RFC822 payload.", uid_str)
+                msg_warnings.append("missing RFC822 payload")
                 skipped.add(uid_str)
+                LOGGER.warning("Message %s issues: %s", uid_str, "; ".join(msg_warnings))
                 continue
             message: Message = email.message_from_bytes(msg_blob)
             subject = _decode_header(message.get('subject', ''))
             sender_addr = _extract_email(message.get('from', '')).lower() or sender
-            LOGGER.info("Processing message UID %s from %s - %s", uid_str, sender_addr, subject)
+            LOGGER.debug("Processing message UID %s from %s - %s", uid_str, sender_addr, subject)
 
             extracted_any = False
             for part in message.walk():
@@ -544,7 +578,7 @@ def download_attachments(
                         extracted_any = True
                     else:
                         warnings.append(f"zip-skip:{uid_str}:{filename}")
-                        LOGGER.warning("Skipped ZIP attachment %s from message %s.", filename, uid_str)
+                        msg_warnings.append(f"zip-skip:{filename}")
                 else:
                     attachments.append(EmailAttachment(sender_addr, subject, filename, payload, uid_str))
                     extracted_any = True
@@ -557,8 +591,9 @@ def download_attachments(
                 try:
                     dl_name, dl_bytes = _download_tenpay_file(link)
                 except Exception as exc:
-                    LOGGER.warning("Failed to download Tenpay link for UID %s: %s", uid_str, exc)
+                    LOGGER.debug("Failed to download Tenpay link for UID %s: %s", uid_str, exc)
                     warnings.append(f"link-download-failed:{uid_str}")
+                    msg_warnings.append("link-download-failed")
                     continue
                 lower_dl = dl_name.lower()
                 downloaded_links.add(link_key)
@@ -579,7 +614,7 @@ def download_attachments(
                         extracted_any = True
                     else:
                         warnings.append(f"link-zip-skip:{uid_str}:{dl_name}")
-                        LOGGER.warning("Tenpay ZIP %s from message %s had no readable entries.", dl_name, uid_str)
+                        msg_warnings.append(f"link-zip:{dl_name}")
                 else:
                     attachments.append(EmailAttachment(sender_addr, subject, dl_name, dl_bytes, uid_str))
                     extracted_any = True
@@ -592,6 +627,9 @@ def download_attachments(
                     LOGGER.debug("Unable to mark message %s as seen.", uid_str, exc_info=True)
             else:
                 skipped.add(uid_str)
+
+            if msg_warnings:
+                LOGGER.warning("Message %s issues: %s", uid_str, "; ".join(msg_warnings))
 
     return EmailFetchResult(attachments, processed, skipped, warnings)
 

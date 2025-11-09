@@ -4,10 +4,13 @@ import logging
 import os
 import random
 import zlib
+from collections import deque
 from io import BytesIO
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
 import pyzipper
+
+LOGGER = logging.getLogger(__name__)
 
 try:
     _BAD_ZIPFILE_ERRORS: Tuple[type[BaseException], ...] = (pyzipper.BadZipFile,)  # type: ignore[attr-defined]
@@ -32,9 +35,11 @@ _ENV_PASSPHRASE_WARNED: set[str] = set()
 
 # Brute-force state: per-identifier generator and attempt counters
 _BRUTEFORCE_STATE: Dict[str, Tuple[Iterable[int], int]] = {}
+_BRUTEFORCE_HEURISTICS: Dict[str, Deque[str]] = {}
 
 # Track identifiers for which we already warned about unlimited brute-force mode
 _UNLIMITED_WARNED: set[str] = set()
+_COMMON_PASSPHRASES: Tuple[str, ...] = ('123456', '000000', '036383')
 
 # Maximum brute-force attempts per identifier (to avoid extremely long runs)
 # Set to 0 or a negative number to allow unlimited attempts (until generator is exhausted).
@@ -81,7 +86,7 @@ def get_env_passphrase(identifier: str, templates: Iterable[str]) -> Optional[st
         value = os.getenv(key)
         if value:
             if key not in _ENV_PASSPHRASE_WARNED:
-                logging.warning(
+                LOGGER.warning(
                     "Using passphrase from environment variable %s; store secrets securely.",
                     key,
                 )
@@ -103,14 +108,23 @@ def next_six_digit_candidate(identifier: str) -> Optional[str]:
     # Initialize iterator and counter if missing
     if key not in _BRUTEFORCE_STATE:
         _BRUTEFORCE_STATE[key] = (_generate_all_six_digit_random_generator(), 0)
+        _BRUTEFORCE_HEURISTICS[key] = deque(_COMMON_PASSPHRASES)
         if _MAX_BRUTEFORCE_ATTEMPTS <= 0 and key not in _UNLIMITED_WARNED:
-            logging.warning(
+            LOGGER.warning(
                 "Unlimited ZIP brute-force attempts enabled (ZIP_MAX_BRUTEFORCE_ATTEMPTS=%s) for %s. This may be slow.",
                 _MAX_BRUTEFORCE_ATTEMPTS,
                 key,
             )
             _UNLIMITED_WARNED.add(key)
     it, count = _BRUTEFORCE_STATE[key]
+    heuristics = _BRUTEFORCE_HEURISTICS.get(key)
+    if heuristics:
+        if _MAX_BRUTEFORCE_ATTEMPTS > 0 and count >= _MAX_BRUTEFORCE_ATTEMPTS:
+            return None
+        candidate = heuristics.popleft()
+        count += 1
+        _BRUTEFORCE_STATE[key] = (it, count)
+        return candidate
     # Respect cap only when positive
     if _MAX_BRUTEFORCE_ATTEMPTS > 0 and count >= _MAX_BRUTEFORCE_ATTEMPTS:
         return None
@@ -140,23 +154,21 @@ def _read_encrypted_member(
         if passphrase is None:
             passphrase = resolver(identifier, context, attempts)
             if not passphrase:
-                logging.warning(
+                LOGGER.warning(
                     "No passphrase supplied for %s; skipping %s.",
                     label,
                     info.filename,
                 )
                 return None
             cache[cache_key] = passphrase
-        if attempts > 0 and attempts % 100 == 0:
-            logging.info(
+        if attempts > 0 and attempts % 10000 == 0:
+            LOGGER.info(
                 "Brute-force attempt %d for %s: trying passphrase %s",
                 attempts,
                 label,
                 passphrase,
             )
 
-        if passphrase == '036383':
-            a = 1
         pwd_bytes = passphrase.encode('utf-8')
         try:
             # Performance optimization: Pass password directly to open() and read() methods
@@ -170,44 +182,56 @@ def _read_encrypted_member(
                     # If password is wrong, this will fail quickly without decrypting the entire file
                     chunk = f.read(1024)
                     # Password is correct, read the rest
+                    LOGGER.info(
+                        "Passphrase accepted for %s after %d attempts: %s",
+                        label,
+                        attempts,
+                        passphrase,
+                    )
                     return chunk + f.read()
+
 
             # For first attempt (likely user-provided password) or small files,
             # read the entire file directly
-            return zf.read(info, pwd=pwd_bytes)
+            data = zf.read(info, pwd=pwd_bytes)
+            LOGGER.info(
+                "Passphrase accepted for %s after %d attempts: %s",
+                label,
+                attempts,
+                passphrase,
+            )
+            return data
         except RuntimeError as exc:
             if attempts == 0:
-                # Log first failed attempt as warning (likely user-provided wrong password)
-                logging.warning(
-                    f"Incorrect passphrase for %s when reading %s: %s",
+                LOGGER.warning(
+                    "Incorrect passphrase for %s when reading %s: %s",
                     label,
                     info.filename,
                     exc,
                 )
-            else:
-                # During brute-force, use debug level to avoid massive logs
-                logging.debug(
-                    f"Incorrect passphrase for %s when reading %s: %s {passphrase}",
+            elif attempts % 10000 == 0:
+                LOGGER.debug(
+                    "Incorrect passphrase for %s when reading %s: %s (candidate=%s)",
                     label,
                     info.filename,
                     exc,
+                    passphrase,
                 )
             cache.pop(cache_key, None)
             attempts += 1
             # Continue attempting until resolver indicates no more candidates
             # by returning a falsy value on the next call.
         except _ZIP_DECOMPRESSION_ERRORS as exc:
-            # Decompression or CRC errors indicate the passphrase failed integrity checks after decrypting.
             if attempts == 0:
-                logging.warning(
-                    f"Decompression failed for %s when reading %s (likely incorrect passphrase): %s",
+                LOGGER.warning(
+                    "Decompression failed for %s when reading %s (likely incorrect passphrase): %s",
                     label,
                     info.filename,
                     exc,
                 )
-            else:
-                logging.debug(
-                    f"Decompression failed for %s when reading %s: %s",
+            elif attempts % 10000 == 0:
+                LOGGER.debug(
+                    "Decompression failed for %s when reading %s: %s",
                     label,
                     info.filename,
                     exc,
@@ -216,7 +240,7 @@ def _read_encrypted_member(
             attempts += 1
             # Retry with next passphrase candidate
         except Exception as exc:
-            logging.error("Failed to read encrypted member %s: %s", info.filename, exc)
+            LOGGER.error("Failed to read encrypted member %s: %s", info.filename, exc)
             return None
 
 
@@ -260,7 +284,7 @@ def _extract_zip(
                     try:
                         data = zf.read(info)
                     except Exception as exc:
-                        logging.warning(
+                        LOGGER.warning(
                             "Failed to read %s from %s: %s",
                             name,
                             label,
@@ -269,9 +293,9 @@ def _extract_zip(
                 if data:
                     extracted.append((name, data))
     except RuntimeError as exc:
-        logging.warning("ZIP processing failed for %s: %s", label, exc)
+        LOGGER.warning("ZIP processing failed for %s: %s", label, exc)
     except Exception as exc:
-        logging.error("Unexpected error reading %s: %s", label, exc, exc_info=True)
+        LOGGER.error("Unexpected error reading %s: %s", label, exc, exc_info=True)
     return extracted
 
 

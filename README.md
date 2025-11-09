@@ -119,7 +119,7 @@ Example configuration structure (the exact file format depends on your `config` 
 ### Local files
 
 ```bash
-python main.py --files /path/to/wechat_or_alipay_transactions.csv
+python butler.py --files /path/to/wechat_or_alipay_transactions.csv
 ```
 
 ### Email ingestion
@@ -127,7 +127,7 @@ python main.py --files /path/to/wechat_or_alipay_transactions.csv
 Run without `--files` to poll email:
 
 ```bash
-python main.py
+python butler.py
 ```
 
 The CLI will:
@@ -142,8 +142,8 @@ Security notes:
 - Passphrases are never brute-forced and remain in memory only for the current run (unless supplied via environment
   variables, which logs a warning).
 - Decrypted attachments are streamed in-memory and not retained on disk after upload.
-- Processed message UIDs are recorded under `.ynab-butler/state.json` to prevent duplicate ingestion; delete the file if
-  you need to replay historical emails.
+- Processed message UIDs and account-name → YNAB-account mappings are recorded under `.ynab-butler/state.json` to
+  prevent duplicates; delete the file if you need to replay historical emails or remap accounts from scratch.
 - Outlook / Office365 requires OAuth2 (“Modern Auth”). Set `EMAIL_AUTH_METHOD=oauth` plus the OAuth variables above; the
   CLI will refresh a short-lived access token securely before logging in via XOAUTH2.
 - WeChat banks that deliver Tenpay download links instead of attachments are supported: the CLI fetches

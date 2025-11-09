@@ -8,9 +8,8 @@ import ynab
 class YNABClient:
     def __init__(self, api_key: str):
         self.configuration = ynab.Configuration(access_token=api_key)
-        # Enable debug logging for requests and responses
+        # Use module logger; level controlled by application config
         self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.DEBUG)
 
     def _log_response(self, method: str, url: str, response: Any) -> None:
         """Log API response details at DEBUG level."""

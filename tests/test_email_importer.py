@@ -145,12 +145,14 @@ def test_email_state_store_persists(tmp_path: Path):
     store.add_processed_uids('server|user', ['1', '2'])
     store.set_owner_budget('bank@example.com', 'budget-123')
     store.set_owner_budget('alice', 'budget-xyz')
+    store.set_account_mapping('budget-123', 'Checking', 'acc-001')
     store.save()
 
     loaded = EmailStateStore(path=state_path)
     assert loaded.get_processed_uids('server|user') == {'1', '2'}
     assert loaded.get_owner_budget('bank@example.com') == 'budget-123'
     assert loaded.get_owner_budget('alice') == 'budget-xyz'
+    assert loaded.get_account_mapping('budget-123', 'Checking') == 'acc-001'
 
 
 def test_log_recent_senders(caplog):
